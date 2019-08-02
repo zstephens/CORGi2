@@ -15,14 +15,23 @@ from misc_corgi import *
 
 # parse input args
 parser = argparse.ArgumentParser(description='CORGi v2.0a')
-parser.add_argument('-i', type=str, required=False, metavar='<str>',                  help="input_readname_dict.json")
-parser.add_argument('-r', type=str, required=True,  metavar='<str>',                  help="* output_clipped_sequences.fa")
-parser.add_argument('-v', type=str, required=True,  metavar='<str>',                  help="* output_svs.dat")
+parser.add_argument('-i',  type=str, required=False, metavar='<str>',                     help="input_readname_dict.json")
+parser.add_argument('-of', type=str, required=True,  metavar='<str>',                     help="* output_clipped_sequences.fa")
+parser.add_argument('-ov', type=str, required=True,  metavar='<str>',                     help="* output_svs.dat")
+#
+parser.add_argument('--min-clip', type=int, required=False,  metavar='<int>', default=50, help="minimum softclip size (S)")
+parser.add_argument('--min-ins',  type=int, required=False,  metavar='<int>', default=50, help="minimum ins size (I)")
+parser.add_argument('--min-del',  type=int, required=False,  metavar='<int>', default=50, help="minimum del size (D)")
+#
 args = parser.parse_args()
 
 INPUT_READ_DICT = args.i
-OUTPUT_READS    = args.r		# interesting_read_segments.fa
-OUTPUT_SV_DATA  = args.v		# sv_json.dat
+OUTPUT_READS    = args.of		# interesting_read_segments.fa
+OUTPUT_SV_DATA  = args.ov		# sv_json.dat
+
+MIN_SIZE_S = args.min_clip
+MIN_SIZE_I = args.min_ins
+MIN_SIZE_D = args.min_del
 
 # bed dir
 EXCL_BED = [MappabilityTrack(SIM_PATH + 'bed/hg38_centromere.bed.gz',      bed_buffer=10000),
@@ -41,9 +50,6 @@ NEXT_READNAME_DICT = {}
 
 # various params
 allow_hard = True
-minClip    = 20
-minDel     = 50
-minIns     = 20
 minXmatch  = 50
 
 CLIP_FULLALN_IDENTITY_THRESH = 0.90
@@ -127,10 +133,10 @@ for line in input_stream:
 		if 'X' in myType:
 			continue	# skip Xs for now. they're so rare and I'm not sure it's worth including them
 
-		if not(ref in CHR_WHITELIST):
-			continue
-		if ref in BREAK_CHR:
-			break
+		####if not(ref in CHR_WHITELIST):
+		####	continue
+		####if ref in BREAK_CHR:
+		####	break
 
 		letters = re.split(r"\d+",cigar)[1:]
 		numbers = [int(n) for n in re.findall(r"\d+",cigar)]
@@ -143,9 +149,9 @@ for line in input_stream:
 		adj    = 0
 		radj   = 0
 		for i in xrange(len(letters)):
-			if letters[i] == 'D' and numbers[i] >= minDel:
+			if letters[i] == 'D' and numbers[i] >= MIN_SIZE_D:
 				pass
-			elif letters[i] == 'I' and numbers[i] >= minIns:
+			elif letters[i] == 'I' and numbers[i] >= MIN_SIZE_I:
 				events.append((adj, 'I', radj, numbers[i]))
 			elif letters[i] == 'X' and numbers[i] >= minXmatch:
 				events.append((adj, 'X', radj, numbers[i]))
@@ -155,12 +161,12 @@ for line in input_stream:
 			if letters[i] in READ_CHAR:
 				radj += numbers[i]
 
-		if letters[0] in CLIP_CHAR and numbers[0] >= minClip:
+		if letters[0] in CLIP_CHAR and numbers[0] >= MIN_SIZE_S:
 			events.append((0, 'Sl', 0, numbers[0]))
 		else:
 			events.append((0, 'start', 0, 0))
 
-		if len(letters) > 1 and letters[-1] in CLIP_CHAR and numbers[-1] >= minClip:
+		if len(letters) > 1 and letters[-1] in CLIP_CHAR and numbers[-1] >= MIN_SIZE_S:
 			adj  = 0
 			radj = 0
 			for i in xrange(len(letters)-1):
