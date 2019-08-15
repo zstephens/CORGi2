@@ -19,6 +19,7 @@ parser.add_argument('-i',  type=str, required=False, metavar='<str>',           
 parser.add_argument('-of', type=str, required=True,  metavar='<str>',                     help="* output_clipped_sequences.fa")
 parser.add_argument('-ov', type=str, required=True,  metavar='<str>',                     help="* output_svs.dat")
 #
+parser.add_argument('--min-mapq', type=int, required=False,  metavar='<int>', default=3,  help="minimum MAPQ")
 parser.add_argument('--min-clip', type=int, required=False,  metavar='<int>', default=50, help="minimum softclip size (S)")
 parser.add_argument('--min-ins',  type=int, required=False,  metavar='<int>', default=50, help="minimum ins size (I)")
 parser.add_argument('--min-del',  type=int, required=False,  metavar='<int>', default=50, help="minimum del size (D)")
@@ -29,6 +30,7 @@ INPUT_READ_DICT = args.i
 OUTPUT_READS    = args.of		# interesting_read_segments.fa
 OUTPUT_SV_DATA  = args.ov		# sv_json.dat
 
+MIN_MAPQ   = args.min_mapq
 MIN_SIZE_S = args.min_clip
 MIN_SIZE_I = args.min_ins
 MIN_SIZE_D = args.min_del
@@ -78,6 +80,7 @@ nSkip_boring = 0
 nSkip_unmap  = 0
 nSkip_suppl  = 0
 nSkip_bed    = 0
+nLowQual     = 0
 
 leaf_svs = {}
 
@@ -114,10 +117,26 @@ for line in input_stream:
 		if flag&16:
 			orientation = 'REV'
 
+		#
+		#
+		#
+		if flag&2048:
+			nSkip_suppl += 1
+			continue	# skip supplementary alignments (hmm?)
+
+		if 'X' in myType:
+			continue	# skip Xs for now. they're so rare and I'm not sure it's worth including them
+
+		if ref in CHR_BLACKLIST:
+			continue
+		#
+		#
+		#
+
 		if cigar == '*':
 			nSkip_unmap += 1
 			if depth == 0:
-				continue	# skip unmapped reads (gasp!)
+				continue	# skip unmapped reads at depth 0
 			else:
 				# output svs that are anchored but connect to unknown sequence
 				#print splt
@@ -126,12 +145,18 @@ for line in input_stream:
 				leaf_svs['*'].append(get_sv_traceback(myAnchors, myType, UNMAPPED_ANCHOR, rname_orig))
 				continue
 
-		if flag&2048:
-			nSkip_suppl += 1
-			continue	# skip supplementary alignments (hmm?)
-
-		if 'X' in myType:
-			continue	# skip Xs for now. they're so rare and I'm not sure it's worth including them
+		mapq = int(splt[4])
+		if mapq < MIN_MAPQ:
+			# treat low mapq at depth > 0 as if they were unmapped
+			if depth > 0:
+				if '*' not in leaf_svs:
+					leaf_svs['*'] = []
+				my_unmap_anchor = UNMAPPED_ANCHOR
+				if myType[-1] == 'I':
+					my_unmap_anchor = '*:1-'+str(len(rdat))+':FWD'
+				leaf_svs['*'].append(get_sv_traceback(myAnchors, myType, my_unmap_anchor, rname_orig))
+			nLowQual += 1
+			continue
 
 		####if not(ref in CHR_WHITELIST):
 		####	continue
@@ -282,6 +307,7 @@ print nSkip_boring+nSkip_done, 'no clipping/ins'
 print nSkip_unmap, 'unmapped'
 print nSkip_suppl, 'supplementary'
 print nSkip_bed, 'bed-exclude regions'
+print nLowQual, 'low mapq (treated as unmapped)'
 print ''
 
 #
@@ -295,15 +321,15 @@ if depth == 0:
 	exit(0)
 
 MAX_SV_DIST    = 100
-MIN_READ_COUNT = 3
+MIN_READ_COUNT = 1
 
 TDUP_BREAKPOINT_TOLERANCE = 10
 
 fo2 = open(OUTPUT_SV_DATA,'w')
 
 for k_chr in sorted(leaf_svs.keys()):
-	if k_chr == '*':
-		continue
+	#if k_chr == '*':
+	#	continue
 
 	N = len(leaf_svs[k_chr])
 	my_leaf_svs = leaf_svs[k_chr]
@@ -333,13 +359,16 @@ for k_chr in sorted(leaf_svs.keys()):
 			final_annotation = 'NO_ANNOTATION'
 
 			if event_type == 'I':
-				bp_i_from = np.median([my_leaf_svs[j][0][1][0][2] for j in clusters[i]])
-				bp_i_to   = np.median([my_leaf_svs[j][0][1][1][1] for j in clusters[i]])
-				if my_leaf_svs[clusters[i][0]][0][1][0][0] == my_leaf_svs[clusters[i][0]][0][1][1][0]:
-					if abs(bp_i_from - bp_i_to) <= TDUP_BREAKPOINT_TOLERANCE:
-						final_annotation = 'TDUP'
+				if my_leaf_svs[clusters[i][0]][0][1][0][0] == '*' or my_leaf_svs[clusters[i][0]][0][1][1][0] == '*':
+					final_annotation = 'NOVEL_INS'
 				else:
-					final_annotation = 'DDUP'
+					bp_i_from = np.median([my_leaf_svs[j][0][1][0][2] for j in clusters[i]])
+					bp_i_to   = np.median([my_leaf_svs[j][0][1][1][1] for j in clusters[i]])
+					if my_leaf_svs[clusters[i][0]][0][1][0][0] == my_leaf_svs[clusters[i][0]][0][1][1][0]:
+						if abs(bp_i_from - bp_i_to) <= TDUP_BREAKPOINT_TOLERANCE:
+							final_annotation = 'TDUP'
+					else:
+						final_annotation = 'DDUP'
 
 			elif event_type == 'Sr' or event_type == 'Sl':
 				if my_leaf_svs[clusters[i][0]][0][1][0][0] != my_leaf_svs[clusters[i][0]][0][1][1][0]:
@@ -369,13 +398,18 @@ for k_chr in sorted(leaf_svs.keys()):
 
 				if subevents[0][0] == 'S':
 
-					if all([orr_1[n][:3] == orr_2[n][:3] for n in xrange(len(orr_1))]):
+					#print chr_1, chr_2, subevents
+
+					if chr_1 == '*' or chr_2 == '*':
 						orr_state = 'FWD'
-					elif all([orr_1[n][:3] != orr_2[n][:3] for n in xrange(len(orr_1))]):
-						orr_state = 'REV'
 					else:
-						print 'weird cluster'
-						exit(1)
+						if all([orr_1[n][:3] == orr_2[n][:3] for n in xrange(len(orr_1))]):
+							orr_state = 'FWD'
+						elif all([orr_1[n][:3] != orr_2[n][:3] for n in xrange(len(orr_1))]):
+							orr_state = 'REV'
+						else:
+							print 'weird cluster'
+							exit(1)
 
 					# anchor length tends to depend on clipping direction, lets choose the longest on either side
 					if 'Sr' in subevents:
@@ -383,12 +417,12 @@ for k_chr in sorted(leaf_svs.keys()):
 						al2_sr = int(np.median([al_2[n] for n in xrange(len(al_2)) if subevents[n] == 'Sr']))
 					else:
 						al1_sr = LARGE_NUMBER
-						al2_sr = LARGE_NUMBER
+						al2_sr = 0
 					if 'Sl' in subevents:
 						al1_sl = int(np.median([al_1[n] for n in xrange(len(al_1)) if subevents[n] == 'Sl']))
 						al2_sl = int(np.median([al_2[n] for n in xrange(len(al_2)) if subevents[n] == 'Sl']))
 					else:
-						al1_sl = 0
+						al1_sl = LARGE_NUMBER
 						al2_sl = 0
 
 					a_1 = chr_1 + ':' + str(min([al1_sr,al1_sl])) + '-' + str(int(np.median(bp_1))) + ':' + 'FWD'
@@ -402,13 +436,16 @@ for k_chr in sorted(leaf_svs.keys()):
 					bp_3  = [my_leaf_svs[j][j2][1][2][1] for j in clusters[i]]
 					al_3  = [my_leaf_svs[j][j2][1][2][2] for j in clusters[i]]
 
-					if all([orr_1[n][:3] == orr_2[n][:3] for n in xrange(len(orr_1))]):
+					if chr_2 == '*':
 						orr_state = 'FWD'
-					elif all([orr_1[n][:3] != orr_2[n][:3] for n in xrange(len(orr_1))]):
-						orr_state = 'REV'
 					else:
-						print 'weird cluster'
-						exit(1)
+						if all([orr_1[n][:3] == orr_2[n][:3] for n in xrange(len(orr_1))]):
+							orr_state = 'FWD'
+						elif all([orr_1[n][:3] != orr_2[n][:3] for n in xrange(len(orr_1))]):
+							orr_state = 'REV'
+						else:
+							print 'weird cluster'
+							exit(1)
 
 					a_1 = chr_1 + ':' + str(int(np.median(al_1))) + '-' + str(int(np.median(bp_1))) + ':' + 'FWD'
 					a_i = chr_2 + ':' + str(int(np.median(bp_2))) + '-' + str(int(np.median(al_2))) + ':' + orr_state
@@ -416,9 +453,9 @@ for k_chr in sorted(leaf_svs.keys()):
 
 					outStr.append(['##', 'I', a_1, a_2, a_i])
 
-			####print i, clusters[i]
-			####for j in clusters[i]:
-			####	print '---', my_leaf_svs[j]
+			#print i, clusters[i]
+			#for j in clusters[i]:
+			#	print '---', my_leaf_svs[j]
 
 			# get readnames
 			clust_rn = set()

@@ -1,3 +1,7 @@
+import numpy as np
+
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import reverse_cuthill_mckee
 
 def isValidCoord(mappability_track_list, myChr, myPos):
 	if any([n.query(myChr,myPos) for n in mappability_track_list]):
@@ -99,8 +103,40 @@ def get_connected_subgraphs(A):
 				not_visited[n] = False
 	return clusters_out
 
+# better, faster! (??)
+def get_connected_subgraphs_rcm(A):
+	A_sparse = csr_matrix(A)
+	A_perm   = reverse_cuthill_mckee(A_sparse)
+	out_clusters  = [[A_perm[0]]]
+	current_start = 0
+	for i in xrange(1,len(A_perm)):
+		pass
 
 CHR_WHITELIST  = [str(n) for n in xrange(1,22+1)] + ['X','Y','*']
 CHR_WHITELIST += ['chr'+n for n in CHR_WHITELIST]
+CHR_BLACKLIST  = ['M', 'chrM']
 #BREAK_CHR      = ['MT','chrMT','M','chrM','2','chr2']
 BREAK_CHR      = []
+
+# adj clustering test
+if __name__ == '__main__':
+
+	test_A = [[0,1,0,0,0],
+	          [1,0,0,0,0],
+	          [0,0,0,1,1],
+	          [0,0,1,0,1],
+	          [0,0,0,1,0]]
+
+	test_B = [[0,0,0,1,0,0,0],
+	          [0,0,1,0,0,0,0],
+	          [0,1,0,0,0,0,0],
+	          [1,0,0,0,0,0,0],
+	          [0,0,0,0,0,0,1],
+	          [0,0,0,0,0,0,0],
+	          [0,0,0,0,1,0,0]]
+
+	print get_connected_subgraphs(test_A)
+	print get_connected_subgraphs_rcm(np.array(test_A,dtype='uint8'))
+
+	print get_connected_subgraphs(test_B)
+	print get_connected_subgraphs_rcm(np.array(test_B,dtype='uint8'))
