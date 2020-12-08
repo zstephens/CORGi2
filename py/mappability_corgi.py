@@ -36,7 +36,7 @@ def condenseListOfRegions(l):
 
 # mappability track
 class MappabilityTrack:
-	def __init__(self, bedfile, bed_buffer=0):
+	def __init__(self, bedfile, bed_buffer=0, minRegionSize=1):
 
 		#print '-', bedfile
 
@@ -99,6 +99,9 @@ class MappabilityTrack:
 						print 'skipping unsorted bed region:', [myChr,myPos,myEnd], endSoFar[myChr]
 						continue
 					endSoFar[myChr] = myEnd
+					if myEnd-myPos < minRegionSize:
+						print 'skipping small bed region:', [myChr,myPos,myEnd]
+						continue
 					self.all_tracks[myChr].append(myPos)
 					self.all_tracks[myChr].append(myEnd)
 				# append something huge to prevent bisect from going past the length of the list

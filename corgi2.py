@@ -10,8 +10,8 @@ import numpy as np
 SIM_PATH = '/'.join(os.path.realpath(__file__).split('/')[:-1]) + '/'
 sys.path.append(SIM_PATH+'/py/')
 
-from mappability_corgi import MappabilityTrack
 from misc_corgi import *
+from virus_corgi import isVirus
 
 # parse input args
 parser = argparse.ArgumentParser(description='CORGi v2.0a')
@@ -24,6 +24,9 @@ parser.add_argument('--min-clip', type=int, required=False,  metavar='<int>', de
 parser.add_argument('--min-ins',  type=int, required=False,  metavar='<int>', default=50, help="minimum ins size (I)")
 parser.add_argument('--min-del',  type=int, required=False,  metavar='<int>', default=50, help="minimum del size (D)")
 #
+parser.add_argument('--only-ins',     action='store_true', required=False,    default=False, help='only consider insertions (not softclipped)')
+parser.add_argument('--ignore-novel', action='store_true', required=False,    default=False, help='ignore novel insertions (leaf is unmapped)')
+#
 args = parser.parse_args()
 
 INPUT_READ_DICT = args.i
@@ -34,12 +37,8 @@ MIN_MAPQ   = args.min_mapq
 MIN_SIZE_S = args.min_clip
 MIN_SIZE_I = args.min_ins
 MIN_SIZE_D = args.min_del
-
-# bed dir
-EXCL_BED = [MappabilityTrack(SIM_PATH + 'bed/hg38_centromere.bed.gz',      bed_buffer=10000),
-            MappabilityTrack(SIM_PATH + 'bed/hg38_gap.bed.gz',             bed_buffer=1000),
-            MappabilityTrack(SIM_PATH + 'bed/hg38_simpleRepeats.bed.gz',   bed_buffer=50),
-            MappabilityTrack(SIM_PATH + 'bed/hg38_microsatellites.bed.gz', bed_buffer=10)]
+ONLY_INS   = args.only_ins
+IGNORE_NOV = args.ignore_novel
 
 # read in input readname:data dict
 READNAME_DICT = {}
@@ -56,6 +55,9 @@ minXmatch  = 50
 
 CLIP_FULLALN_IDENTITY_THRESH = 0.90
 
+#
+#
+#
 if not sys.stdin.isatty():
 	input_stream = sys.stdin
 else:
@@ -132,29 +134,33 @@ for line in input_stream:
 		#
 		#
 		#
+		my_unmap_anchor = '*:1-'+str(len(rdat))+':FWD'
 
 		if cigar == '*':
 			nSkip_unmap += 1
-			if depth == 0:
+			if depth == 0 or (IGNORE_NOV and depth <= 1):
 				continue	# skip unmapped reads at depth 0
 			else:
 				# output svs that are anchored but connect to unknown sequence
 				#print splt
 				if '*' not in leaf_svs:
 					leaf_svs['*'] = []
-				leaf_svs['*'].append(get_sv_traceback(myAnchors, myType, UNMAPPED_ANCHOR, rname_orig))
+				leaf_svs['*'].append(get_sv_traceback(myAnchors, myType, my_unmap_anchor, rname_orig))
 				continue
 
+		# filter by mapq (make exception for viruses)
 		mapq = int(splt[4])
-		if mapq < MIN_MAPQ:
+		if mapq < MIN_MAPQ and isVirus(ref) == False:
 			# treat low mapq at depth > 0 as if they were unmapped
 			if depth > 0:
-				if '*' not in leaf_svs:
-					leaf_svs['*'] = []
-				my_unmap_anchor = UNMAPPED_ANCHOR
-				if myType[-1] == 'I':
-					my_unmap_anchor = '*:1-'+str(len(rdat))+':FWD'
-				leaf_svs['*'].append(get_sv_traceback(myAnchors, myType, my_unmap_anchor, rname_orig))
+				if isVirus(ref):
+					if 'viral' not in leaf_svs:
+						leaf_svs['viral'] = []
+					leaf_svs['viral'].append(get_sv_traceback(myAnchors, myType, my_unmap_anchor, rname_orig))
+				elif IGNORE_NOV == False or depth > 1:
+					if '*' not in leaf_svs:
+						leaf_svs['*'] = []
+					leaf_svs['*'].append(get_sv_traceback(myAnchors, myType, my_unmap_anchor, rname_orig))
 			nLowQual += 1
 			continue
 
@@ -217,7 +223,8 @@ for line in input_stream:
 			myRead = rdat[events[0][2]:events[0][2]+events[0][3]]
 			if orientation == 'REV':
 				myRead = RC(myRead)
-			out_dat.append((rnm, a_r, events[0][1], events[0][3], events[0][0]+pos, events[0][2], myRead))
+			if ONLY_INS == False:
+				out_dat.append((rnm, a_r, events[0][1], events[0][3], events[0][0]+pos, events[0][2], myRead))
 
 		if events[-1][1] == 'Sr':
 			my_anchor_len = events[-1][0] - events[-2][0]
@@ -225,7 +232,8 @@ for line in input_stream:
 			myRead = rdat[events[-1][2]:events[-1][2]+events[-1][3]]
 			if orientation == 'REV':
 				myRead = RC(myRead)
-			out_dat.append((rnm, a_l, events[-1][1], events[-1][3], events[-1][0]+pos, events[-1][2], myRead))
+			if ONLY_INS == False:
+				out_dat.append((rnm, a_l, events[-1][1], events[-1][3], events[-1][0]+pos, events[-1][2], myRead))
 
 		for i in xrange(len(events)):
 			if events[i][1] == 'I' or events[i][1] == 'X':
@@ -261,9 +269,14 @@ for line in input_stream:
 					myIdentity = float(mm)/float(sl+sr+mm+xm)
 
 					if myIdentity >= CLIP_FULLALN_IDENTITY_THRESH:
-						if ref not in leaf_svs:
-							leaf_svs[ref] = []
-						leaf_svs[ref].append(get_sv_traceback(myAnchors, myType, a_i, rname_orig))
+						if isVirus(ref):
+							if 'viral' not in leaf_svs:
+								leaf_svs['viral'] = []
+							leaf_svs['viral'].append(get_sv_traceback(myAnchors, myType, a_i, rname_orig))
+						else:
+							if ref not in leaf_svs:
+								leaf_svs[ref] = []
+							leaf_svs[ref].append(get_sv_traceback(myAnchors, myType, a_i, rname_orig))
 
 					nSkip_done += 1
 	
@@ -328,8 +341,8 @@ TDUP_BREAKPOINT_TOLERANCE = 10
 fo2 = open(OUTPUT_SV_DATA,'w')
 
 for k_chr in sorted(leaf_svs.keys()):
-	#if k_chr == '*':
-	#	continue
+	if k_chr == '*' and (IGNORE_NOV and depth <= 1):
+		continue
 
 	N = len(leaf_svs[k_chr])
 	my_leaf_svs = leaf_svs[k_chr]
@@ -352,7 +365,12 @@ for k_chr in sorted(leaf_svs.keys()):
 	clusters = get_connected_subgraphs(adj_matrix)
 
 	for i in xrange(len(clusters)):
+
 		if len(clusters[i]) >= MIN_READ_COUNT:
+
+			# exclude SVs that involve viral references and nothing else
+			if all([isVirus(n[1][0][0]) for n in my_leaf_svs[clusters[i][0]]] + [isVirus(n[1][1][0]) for n in my_leaf_svs[clusters[i][0]]]):
+				continue
 		
 			event_type = '+'.join([n[0] for n in my_leaf_svs[clusters[i][0]]])
 

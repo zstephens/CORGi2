@@ -1,7 +1,20 @@
+import os
 import numpy as np
 
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import reverse_cuthill_mckee
+#from scipy.sparse import csr_matrix
+#from scipy.sparse.csgraph import reverse_cuthill_mckee
+
+from mappability_corgi import MappabilityTrack
+from virus_corgi import getViralName
+
+# absolute path to resources
+RESOURCE_PATH = '/'.join(os.path.realpath(__file__).split('/')[:-2]) + '/resources/'
+
+# bed dir
+EXCL_BED = [MappabilityTrack(RESOURCE_PATH + 'hg38_centromere.bed.gz',      bed_buffer=10000),
+            MappabilityTrack(RESOURCE_PATH + 'hg38_gap.bed.gz',             bed_buffer=1000),
+            MappabilityTrack(RESOURCE_PATH + 'hg38_simpleRepeats.bed.gz',   bed_buffer=50),
+            MappabilityTrack(RESOURCE_PATH + 'hg38_microsatellites.bed.gz', bed_buffer=10)]
 
 def isValidCoord(mappability_track_list, myChr, myPos):
 	if any([n.query(myChr,myPos) for n in mappability_track_list]):
@@ -34,6 +47,9 @@ def get_sv_traceback(myAnchors, myType, a_i, rname_orig):
 			r2 = a_i.split(':')[0:1] + [int(n) for n in a_i.split(':')[1].split('-')] + a_i.split(':')[2:3]
 			isSameOrientation = (r1[3] == r2[3])
 			if not isSameOrientation:
+				if current_type == 'Sl':
+					r2 = [r2[0], r2[1], r2[2], r2[3]+'*']
+				elif current_type == 'Sr':
 					r2 = [r2[0], r2[2], r2[1], r2[3]+'*']
 
 			if current_type == 'Sr':
@@ -47,10 +63,14 @@ def get_sv_traceback(myAnchors, myType, a_i, rname_orig):
 #            +--> [chr, p1, p2, orientation]
 LARGE_NUMBER = (2**31) - 1
 def event_dist(sv1, sv2):
+	# event size
 	if sv1[0][0] != sv2[0][0] or len(sv1[1]) != len(sv2[1]):
 		return None
+	# references
 	for i in xrange(len(sv1[1])):
-		if sv1[1][i][0] != sv2[1][i][0]:
+		r1 = getViralName(sv1[1][i][0])
+		r2 = getViralName(sv2[1][i][0])
+		if r1 != r2:
 			return None
 
 	if sv1[0] == 'I':
