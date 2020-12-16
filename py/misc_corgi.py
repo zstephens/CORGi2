@@ -1,4 +1,5 @@
 import os
+import gzip
 import numpy as np
 
 #from scipy.sparse import csr_matrix
@@ -16,6 +17,14 @@ EXCL_BED = [MappabilityTrack(RESOURCE_PATH + 'hg38_centromere.bed.gz',      bed_
             MappabilityTrack(RESOURCE_PATH + 'hg38_simpleRepeats.bed.gz',   bed_buffer=50),
             MappabilityTrack(RESOURCE_PATH + 'hg38_microsatellites.bed.gz', bed_buffer=10)]
 
+HUMAN_CHR  = [str(n) for n in range(1,22+1)] + ['X', 'Y', 'M']
+HUMAN_CHR += ['chr'+n for n in HUMAN_CHR]
+HUMAN_CHR  = {n:True for n in HUMAN_CHR}
+
+LEXICO_2_IND = {'chr1':1, 'chr2':2, 'chr3':3, 'chr10':10, 'chr11':11, 'chr12':12, 'chr19':19, 'chr20':20,
+				'chr4':4, 'chr5':5, 'chr6':6, 'chr13':13, 'chr14':14, 'chr15':15, 'chr21':21, 'chr22':22,
+				'chr7':7, 'chr8':8, 'chr9':9, 'chr16':16, 'chr17':17, 'chr18':18, 'chrX' :23, 'chrY' :24, 'chrM' :25}
+
 def isValidCoord(mappability_track_list, myChr, myPos):
 	if any([n.query(myChr,myPos) for n in mappability_track_list]):
 		return False
@@ -24,6 +33,80 @@ def isValidCoord(mappability_track_list, myChr, myPos):
 RC_DICT = {'A':'T','C':'G','G':'C','T':'A','N':'N'}
 def RC(s):
 	return ''.join([RC_DICT[n] for n in s[::-1]])
+
+# track for finding nearest-gene
+TRANSCRIPT_TRACK = {}
+f = gzip.open(RESOURCE_PATH + 'transcripts_hg38.bed.gz', 'r')
+for line in f:
+	splt = line.strip().split('\t')
+	if splt[0] not in TRANSCRIPT_TRACK:
+		TRANSCRIPT_TRACK[splt[0]] = []
+	TRANSCRIPT_TRACK[splt[0]].append([int(splt[1]), int(splt[2]), splt[3], splt[4]])
+f.close()
+
+def get_nearest_transcript(myChr, pos, max_dist=20000):
+	if myChr in TRANSCRIPT_TRACK:
+		# lazy and slow, but it gets the job done!
+		closest_dist = 99999999999
+		closest_meta = ''
+		for n in TRANSCRIPT_TRACK[myChr]:
+			if pos >= n[0] and pos <= n[1]:
+				closest_dist = 0
+				closest_meta = [n[2], n[3]]
+				break
+			my_dist = min([abs(pos-n[0]), abs(pos-n[1])])
+			if my_dist < closest_dist:
+				closest_dist = my_dist
+				closest_meta = [n[2], n[3]]
+		if closest_dist <= max_dist:
+			return (closest_dist, closest_meta)
+	return None
+
+# common SVs
+COMMON_SVS = {}
+f = gzip.open(RESOURCE_PATH + 'common_svs_hg38.bed.gz', 'r')
+for line in f:
+	splt = line.strip().split('\t')
+	if splt[0] not in COMMON_SVS:
+		COMMON_SVS[splt[0]] = []
+	COMMON_SVS[splt[0]].append([int(splt[1]), int(splt[2]), splt[3]])
+f.close()
+
+SV_TYPE_MAP = {'deletion':                 ['DEL'],
+               'herv deletion':            ['DEL'],
+               'alu deletion':             ['DEL'],
+               'line1 deletion':           ['DEL'],
+               'sva deletion':             ['DEL'],
+               'duplication':              ['DUP'],
+               'copy number loss':         ['DEL'],
+               'copy number gain':         ['DUP'],
+               'copy number variation':    ['DUP','DEL'],
+               'insertion':                ['INS'],
+               'line1 insertion':          ['INS'],
+               'alu insertion':            ['INS'],
+               'sva insertion':            ['INS'],
+               'mobile element insertion': ['INS']}
+
+COLLAPSE_DUP_AND_INS = True
+
+if COLLAPSE_DUP_AND_INS:
+	for k in SV_TYPE_MAP.keys():
+		if 'DUP' in SV_TYPE_MAP[k] and 'INS' not in SV_TYPE_MAP[k]:
+			SV_TYPE_MAP[k].append('INS')
+		if 'INS' in SV_TYPE_MAP[k] and 'DUP' not in SV_TYPE_MAP[k]:
+			SV_TYPE_MAP[k].append('DUP')
+
+def is_common_sv(myChr, pos_start, pos_end, my_type, max_endpoint_dist=50):
+	if myChr in COMMON_SVS:
+		c2 = sorted([pos_start, pos_end])
+		for sv in COMMON_SVS[myChr]:
+			if my_type in SV_TYPE_MAP[sv[2]]:	# same type
+				c1 = sorted([sv[0], sv[1]])
+				d1 = abs(c1[0]-c2[0])
+				d2 = abs(c1[1]-c2[1])
+				if d1 <= max_endpoint_dist and d2 <= max_endpoint_dist:	# beakpoints are same
+					return True
+	return False
 
 #
 UNMAPPED_ANCHOR = '*:0-0:FWD'
